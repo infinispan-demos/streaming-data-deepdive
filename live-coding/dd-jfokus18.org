@@ -88,15 +88,18 @@ curl http://vertx-openshift-example-myproject.127.0.0.1.nip.io
 *** Implement /inject
 #+BEGIN_SRC java
 private void inject(RoutingContext ctx) {
-  Flowable<String> fileFlowable = rxReadGunzippedTextResource("cff-stop-2016-02-29__.jsonl.gz");
+  String fileName = "cff-stop-2016-02-29__.jsonl.gz";
+  Flowable<String> fileFlowable = rxReadGunzippedTextResource(fileName);
   fileFlowable
     .map(StationsInjector::toEntry)
     .flatMapCompletable(this::dispatch)
     .subscribeOn(Schedulers.io())
-    .subscribe(
-      () -> ctx.response().end("Injector started"),
+    .doOnError(
       failure -> injectFailure(ctx, failure)
-    );
+    )
+    .subscribe();
+
+  ctx.response().end("Injector started");
 }
 #+END_SRC
 *** Add inject failure
@@ -310,8 +313,10 @@ vertx
 #+END_SRC
 *** Create query to get all train IDs for trains with a certain route name
 #+BEGIN_SRC java
+String trainName = entry.getValue();
 Query query = queryFactory.create(
-    "select tp.trainId from workshop.model.TrainPosition tp where name = :trainName");
+    "select tp.trainId from workshop.model.TrainPosition tp where name = :trainName"
+);
 query.setParameter("trainName", trainName);
 #+END_SRC
 *** Execute the query
