@@ -5,7 +5,7 @@
 #+END_SRC
 ** Live coding
 #+BEGIN_SRC shell
-~/1/streaming-data-workshop
+~/1/streaming-data-deepdive
 #+END_SRC
 * First time
 ** Adjust Docker settings
