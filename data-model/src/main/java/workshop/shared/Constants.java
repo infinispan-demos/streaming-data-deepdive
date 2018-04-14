@@ -4,8 +4,6 @@ public final class Constants {
 
   public static final String STATION_BOARDS_CACHE_NAME = "station-boards";
   public static final String TRAIN_POSITIONS_CACHE_NAME = "train-positions";
-  public static final String TRAIN_POSITIONS_TOPIC = "train-positions";
-  public static final String STATION_BOARDS_TOPIC = "station-boards";
   public static final String DELAYED_TRAINS_CACHE_NAME = "delayed-trains";
 
   public static final String STATION_BOARD_PROTO = "/station-board.proto";
@@ -20,10 +18,6 @@ public final class Constants {
   public static final String STATIONS_INJECTOR_URI = "/inject";
   public static final String POSITIONS_INJECTOR_HOST = "positions-injector";
   public static final String POSITIONS_INJECTOR_URI = "/inject";
-  public static final String POSITIONS_TRANSPORT_HOST = "positions-transport";
-  public static final String POSITIONS_TRANSPORT_URI = "/push";
-  public static final String STATIONS_TRANSPORT_HOST = "stations-transport";
-  public static final String STATIONS_TRANSPORT_URI = "/push";
   public static final String LISTEN_URI = "/listen";
   public static final String DELAYED_TRAINS_HOST = "delayed-trains";
   public static final String DELAYED_TRAINS_POSITIONS_URI = "/positions";

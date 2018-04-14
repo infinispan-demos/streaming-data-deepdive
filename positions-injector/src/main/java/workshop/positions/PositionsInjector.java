@@ -1,8 +1,32 @@
 package workshop.positions;
 
 import static java.util.logging.Level.SEVERE;
+import static workshop.shared.Constants.DATAGRID_HOST;
+import static workshop.shared.Constants.DATAGRID_PORT;
 import static workshop.shared.Constants.POSITIONS_INJECTOR_URI;
-import static workshop.shared.Constants.TRAIN_POSITIONS_TOPIC;
+import static workshop.shared.Constants.TRAIN_POSITIONS_CACHE_NAME;
+
+import hu.akarnokd.rxjava2.interop.CompletableInterop;
+import io.reactivex.Completable;
+import io.reactivex.Flowable;
+import io.reactivex.Single;
+import io.reactivex.schedulers.Schedulers;
+import io.vertx.core.Handler;
+import io.vertx.core.json.JsonObject;
+import io.vertx.reactivex.core.AbstractVerticle;
+import io.vertx.reactivex.core.Future;
+import io.vertx.reactivex.core.RxHelper;
+import io.vertx.reactivex.ext.web.Router;
+import io.vertx.reactivex.ext.web.RoutingContext;
+import org.infinispan.client.hotrod.RemoteCache;
+import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.client.hotrod.marshall.ProtoStreamMarshaller;
+import org.infinispan.protostream.FileDescriptorSource;
+import org.infinispan.protostream.SerializationContext;
+import workshop.model.GeoLocBearing;
+import workshop.model.TimedPosition;
+import workshop.model.TrainPosition;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -17,67 +41,79 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
 
-import org.apache.kafka.clients.producer.ProducerRecord;
-
-import io.reactivex.Completable;
-import io.reactivex.Flowable;
-import io.reactivex.Single;
-import io.reactivex.schedulers.Schedulers;
-import io.vertx.config.ConfigRetrieverOptions;
-import io.vertx.config.ConfigStoreOptions;
-import io.vertx.core.Future;
-import io.vertx.core.json.JsonObject;
-import io.vertx.kafka.client.producer.KafkaWriteStream;
-import io.vertx.reactivex.CompletableHelper;
-import io.vertx.reactivex.config.ConfigRetriever;
-import io.vertx.reactivex.core.AbstractVerticle;
-import io.vertx.reactivex.core.impl.AsyncResultCompletable;
-import io.vertx.reactivex.ext.web.Router;
-import io.vertx.reactivex.ext.web.RoutingContext;
-
 public class PositionsInjector extends AbstractVerticle {
 
   private static final Logger log = Logger.getLogger(PositionsInjector.class.getName());
 
-  private KafkaWriteStream<String, String> stream;
+  private RemoteCacheManager remote;
+  private RemoteCache<String, TrainPosition> trainPositionsCache;
 
   @Override
-  public void start(Future<Void> future) {
-
+  public void start(io.vertx.core.Future<Void> future) {
     Router router = Router.router(vertx);
     router.get(POSITIONS_INJECTOR_URI).handler(this::inject);
 
-    retrieveConfiguration()
-      .doOnSuccess(json ->
-        stream = KafkaWriteStream
-          .create(vertx.getDelegate(), json.getJsonObject("kafka").getMap(), String.class, String.class))
-      .flatMapCompletable(v ->
-        vertx.createHttpServer()
+    vertx
+      .rxExecuteBlocking(this::remoteCacheManager)
+      .flatMap(x ->
+        vertx
+          .createHttpServer()
           .requestHandler(router::accept)
           .rxListen(8080)
-          .doOnSuccess(server -> log.info("Positions injector HTTP server started"))
-          .doOnError(t -> log.log(Level.SEVERE, "Positions injector HTTP server failed to start", t))
-          .toCompletable() // Ignore result
       )
-      .subscribe(CompletableHelper.toObserver(future));
+      .subscribe(
+        server -> {
+          log.info("Http server started and connected to datagrid");
+          future.complete();
+        }
+        , future::fail
+      );
   }
 
   @Override
-  public void stop() {
-    if (Objects.nonNull(stream)) {
-      stream.close();
+  public void stop(io.vertx.core.Future<Void> future) {
+    if (Objects.nonNull(remote)) {
+      remote.stopAsync()
+        .thenRun(future::complete);
+    } else {
+      future.complete();
     }
   }
 
   // TODO: Duplicate
   private void inject(RoutingContext ctx) {
-    rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
-      .map(PositionsInjector::toEntry)
-      .flatMapCompletable(this::dispatch)
-      .subscribeOn(Schedulers.io())
-      .doOnError(t -> log.log(SEVERE, "Error while loading", t))
-      .subscribe();
-    ctx.response().end("Injector started");
+    vertx
+      .rxExecuteBlocking(trainPositionsCache())
+      .flatMapCompletable(x -> clearTrainPositionsCache())
+      .subscribeOn(RxHelper.scheduler(vertx.getOrCreateContext()))
+      .subscribe(() -> {
+        vertx.setPeriodic(5000L, l ->
+          vertx.executeBlocking(fut -> {
+            log.info(String.format("Progress: stored=%d%n", trainPositionsCache.size()));
+            fut.complete();
+          }, false, ar -> {}));
+
+        rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
+          .map(PositionsInjector::toEntry)
+          .map(e -> CompletableInterop.fromFuture(trainPositionsCache.putAsync(e.getKey(), TrainPosition.make(e.getValue()))))
+          .to(flowable -> Completable.merge(flowable, 100))
+          .subscribe(() -> {}, t -> log.log(SEVERE, "Error while loading", t));
+
+        ctx.response().end("Injector started");
+      });
+//
+//
+//    rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
+//      .map(PositionsInjector::toEntry)
+//      .flatMapCompletable(this::dispatch)
+//      .subscribeOn(Schedulers.io())
+//      .doOnError(t -> log.log(SEVERE, "Error while loading", t))
+//      .subscribe();
+//    ctx.response().end("Injector started");
+  }
+
+  private Completable clearTrainPositionsCache() {
+    return CompletableInterop.fromFuture(trainPositionsCache.clearAsync());
   }
 
   private static Map.Entry<String, String> toEntry(String line) {
@@ -108,28 +144,41 @@ public class PositionsInjector extends AbstractVerticle {
       .subscribeOn(Schedulers.io());
   }
 
-  private Single<JsonObject> retrieveConfiguration() {
-    ConfigStoreOptions store = new ConfigStoreOptions()
-      .setType("file")
-      .setFormat("yaml")
-      .setConfig(new JsonObject()
-        .put("path", "app-config.yaml")
+  private void remoteCacheManager(io.vertx.reactivex.core.Future<Void> f) {
+    try {
+      remote = new RemoteCacheManager(
+        new ConfigurationBuilder().addServer()
+          .host(DATAGRID_HOST)
+          .port(DATAGRID_PORT)
+          .marshaller(ProtoStreamMarshaller.class)
+          .build());
+
+      SerializationContext ctx =
+        ProtoStreamMarshaller.getSerializationContext(remote);
+
+      ctx.registerProtoFiles(
+        FileDescriptorSource.fromResources("train-position.proto")
       );
-    return ConfigRetriever.create(vertx, new ConfigRetrieverOptions().addStore(store)).rxGetConfig();
+
+      ctx.registerMarshaller(new TrainPosition.Marshaller());
+      ctx.registerMarshaller(new TimedPosition.Marshaller());
+      ctx.registerMarshaller(new GeoLocBearing.Marshaller());
+
+      f.complete();
+    } catch (Exception e) {
+      log.log(Level.SEVERE, "Error creating client", e);
+      throw new RuntimeException(e);
+    }
   }
 
-  private Completable dispatch(Map.Entry<String, String> entry) {
-    ProducerRecord<String, String> record
-      = new ProducerRecord<>(TRAIN_POSITIONS_TOPIC, entry.getKey(), entry.getValue());
-    return new AsyncResultCompletable(
-      handler ->
-        stream.write(record, x -> {
-          if (x.succeeded()) {
-            handler.handle(Future.succeededFuture());
-          } else {
-            handler.handle(Future.failedFuture(x.cause()));
-          }
-        }));
+  private Handler<Future<Void>> trainPositionsCache() {
+    return f -> {
+      RemoteCache<String, TrainPosition> cache =
+        remote.getCache(TRAIN_POSITIONS_CACHE_NAME);
+      this.trainPositionsCache = cache;
+      f.complete();
+    };
   }
+
 
 }

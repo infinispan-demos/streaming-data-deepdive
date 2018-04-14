@@ -7,8 +7,6 @@ mvn clean install -N
 (cd ./workshop-main; mvn fabric8:deploy)
 (cd ./positions-injector; mvn fabric8:deploy)
 (cd ./stations-injector; mvn fabric8:deploy -Psolution)
-(cd ./positions-transport; mvn fabric8:deploy)
-(cd ./stations-transport; mvn fabric8:deploy -Psolution)
 (cd ./delayed-listener; mvn fabric8:deploy -Psolution)
 (cd ./delayed-trains; mvn fabric8:deploy -Psolution)
 (cd ./datagrid-visualizer; ./deploy.sh)

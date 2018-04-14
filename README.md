@@ -2,7 +2,7 @@
 
 ## Requirements
 
-* OpenShift 3.6
+* OpenShift 3.7.2
 * Maven
 * NodeJS 4.2 (
 [`nvm`](https://github.com/creationix/nvm)
@@ -13,20 +13,16 @@ is a great tool for switching around NodeJS versions)
 1. Launch `./start-solution.sh` and verify all the components are correctly deployed
   * Connect to `https://127.0.0.1:8443/` with `developer:developer`
   * Go to `my-project` and these applications with a single pod correctly started should be present :
-    - kafka 
-    - zookeeper
     - datagrid-visualizer
     - delayed-listener
     - delayed-trains
     - positions-injector
-    - positions transport
     - stations-injector
-    - stations-transport
     - workshop-main
     - datagrid (with 3 pods)
     
 2. Launch the data injectors 
-  * Start the injector (collect and put in kafka) and the transport (read from kafka and put in infinispan) 
+  * Start the injector 
     `curl http://workshop-main-myproject.127.0.0.1.nip.io/inject`
 
 3. Check the datagrid visualizer
@@ -36,7 +32,7 @@ is a great tool for switching around NodeJS versions)
   
 4. Start the Dashboard - run the main delayed-dashboard/DelayedDashboard and see the delayed trains
 
-5. Start the node client in the web-viewer : `node server` and see in `http://localhost:3000/` the trains moving
+5. Start the node client in the web-viewer : `./start.sh` and see in `http://localhost:3000/` the trains moving
 
 ## Live coding
 

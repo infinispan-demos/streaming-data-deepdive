@@ -25,7 +25,6 @@ import io.vertx.config.ConfigRetrieverOptions;
 import io.vertx.config.ConfigStoreOptions;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
-import io.vertx.kafka.client.consumer.KafkaReadStream;
 import io.vertx.reactivex.CompletableHelper;
 import io.vertx.reactivex.FlowableHelper;
 import io.vertx.reactivex.config.ConfigRetriever;
@@ -43,7 +42,6 @@ public class PositionsPusher extends AbstractVerticle {
 
   private static final Logger log = Logger.getLogger(PositionsPusher.class.getName());
 
-  private KafkaReadStream<String, String> consumer;
   private RemoteCacheManager client;
   private RemoteCache<String, TrainPosition> cache;
 
