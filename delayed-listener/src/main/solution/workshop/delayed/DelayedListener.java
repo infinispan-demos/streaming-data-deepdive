@@ -106,6 +106,7 @@ public class DelayedListener extends AbstractVerticle {
 
     continuousQuery.addContinuousQueryListener(query, listener);
     log.info("Continuous query added");
+    f.complete();
   }
 
   @Override
@@ -166,7 +167,7 @@ public class DelayedListener extends AbstractVerticle {
       f.complete();
     } catch (Exception e) {
       log.log(Level.SEVERE, "Error creating client", e);
-      throw new RuntimeException(e);
+      f.fail(e);
     }
   }
 

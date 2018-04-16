@@ -1,28 +1,42 @@
 package workshop.delayed;
 
+import io.reactivex.Single;
 import io.vertx.core.Handler;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.bridge.BridgeEventType;
 import io.vertx.ext.bridge.PermittedOptions;
 import io.vertx.ext.web.handler.sockjs.BridgeOptions;
 import io.vertx.reactivex.core.AbstractVerticle;
+import io.vertx.reactivex.core.Future;
 import io.vertx.reactivex.ext.web.Router;
 import io.vertx.reactivex.ext.web.RoutingContext;
+import io.vertx.reactivex.ext.web.client.HttpResponse;
+import io.vertx.reactivex.ext.web.client.WebClient;
+import io.vertx.reactivex.ext.web.codec.BodyCodec;
 import io.vertx.reactivex.ext.web.handler.sockjs.SockJSHandler;
 import org.infinispan.client.hotrod.RemoteCache;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.Search;
+import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.client.hotrod.marshall.ProtoStreamMarshaller;
+import org.infinispan.protostream.FileDescriptorSource;
+import org.infinispan.protostream.SerializationContext;
 import org.infinispan.query.api.continuous.ContinuousQuery;
 import org.infinispan.query.api.continuous.ContinuousQueryListener;
 import org.infinispan.query.dsl.Query;
 import org.infinispan.query.dsl.QueryFactory;
+import workshop.model.Station;
 import workshop.model.Stop;
+import workshop.model.Train;
 
 import java.util.Objects;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import static workshop.shared.Constants.DATAGRID_HOST;
+import static workshop.shared.Constants.DATAGRID_PORT;
 import static workshop.shared.Constants.DELAYED_TRAINS_CACHE_NAME;
+import static workshop.shared.Constants.STATION_BOARDS_CACHE_NAME;
 import static workshop.shared.Constants.WORKSHOP_MAIN_HOST;
 import static workshop.shared.Constants.WORKSHOP_MAIN_URI;
 
@@ -30,26 +44,27 @@ public class DelayedListener extends AbstractVerticle {
 
   private static final Logger log = Logger.getLogger(DelayedListener.class.getName());
 
-  private RemoteCacheManager client;
+  private RemoteCacheManager remote;
+  private RemoteCache<String, Stop> stationBoardsCache;
+  private ContinuousQuery<String, Stop> continuousQuery;
 
   @Override
-  public void start(io.vertx.core.Future<Void> future) throws Exception {
+  public void start(io.vertx.core.Future<Void> future) {
     log.info("Starting delay listener verticle");
 
     Router router = Router.router(vertx);
     router.route("/eventbus/*").handler(this.sockJSHandler());
 
     vertx
-      .rxExecuteBlocking(Util::remoteCacheManager)
+      .rxExecuteBlocking(this::remoteCacheManager)
       .flatMap(remote ->
-        vertx.createHttpServer()
+        vertx
+          .createHttpServer()
           .requestHandler(router::accept)
           .rxListen(8080)
-          .map(s -> remote)
       )
       .subscribe(
-        remote -> {
-          client = remote;
+        server -> {
           log.info("Listener HTTP server started");
           future.complete();
         },
@@ -58,21 +73,45 @@ public class DelayedListener extends AbstractVerticle {
   }
 
   private void listen() {
-    Util.httpGet(WORKSHOP_MAIN_HOST, WORKSHOP_MAIN_URI, vertx)
-      .flatMap(rsp -> vertx.rxExecuteBlocking(Util.remoteCache(client)))
+    vertx
+      .rxExecuteBlocking(stationBoardsCache())
+      .flatMap(x -> vertx.rxExecuteBlocking(this::removeContinuousQueryListeners))
+      .flatMap(x -> httpGet(WORKSHOP_MAIN_HOST, WORKSHOP_MAIN_URI))
+      .flatMap(x -> vertx.rxExecuteBlocking(this::addContinuousQuery))
       .subscribe(
-        this::addContinuousQuery
+        x -> {}
         , t -> log.log(Level.SEVERE, "Error starting listener", t)
       );
   }
 
-  private void addContinuousQuery(RemoteCache<String, Stop> stations) {
+  private void addContinuousQuery(Future<Void> f) {
+    log.info("Add continuous query");
+
     // TODO live coding
+    // Get query factory
+    // Create query
+    // Create continuous query listener
+      // Convert stop to json
+      // Publish json
+      // Store train name in delayed trains cache
+
+    // TODO live coding
+    // Put listener and query together
+
+    log.info("TODO");
+
+    // TODO live coding
+    // Complete future
   }
 
   @Override
-  public void stop() {
-    if (Objects.nonNull(client)) client.stop();
+  public void stop(io.vertx.core.Future<Void> future) {
+    if (Objects.nonNull(remote)) {
+      remote.stopAsync()
+        .thenRun(future::complete);
+    } else {
+      future.complete();
+    }
   }
 
   private static JsonObject toJson(Stop stop) {
@@ -98,6 +137,59 @@ public class DelayedListener extends AbstractVerticle {
       be.complete(true);
     });
     return sockJSHandler;
+  }
+
+  private void remoteCacheManager(Future<Void> f) {
+    try {
+      remote = new RemoteCacheManager(
+        new ConfigurationBuilder().addServer()
+          .host(DATAGRID_HOST)
+          .port(DATAGRID_PORT)
+          .marshaller(ProtoStreamMarshaller.class)
+          .build());
+
+      SerializationContext ctx =
+        ProtoStreamMarshaller.getSerializationContext(remote);
+
+      ctx.registerProtoFiles(
+        FileDescriptorSource.fromResources("station-board.proto")
+      );
+
+      ctx.registerMarshaller(new Stop.Marshaller());
+      ctx.registerMarshaller(new Station.Marshaller());
+      ctx.registerMarshaller(new Train.Marshaller());
+
+      f.complete();
+    } catch (Exception e) {
+      log.log(Level.SEVERE, "Error creating client", e);
+      f.fail(e);
+    }
+  }
+
+  private Handler<Future<Void>> stationBoardsCache() {
+    return f -> {
+      log.info("Get station boards cache and continuous query");
+      if (Objects.isNull(stationBoardsCache) && Objects.isNull(continuousQuery)) {
+        this.stationBoardsCache = remote.getCache(STATION_BOARDS_CACHE_NAME);
+        this.continuousQuery = Search.getContinuousQuery(this.stationBoardsCache);
+      }
+
+      f.complete();
+    };
+  }
+
+  private void removeContinuousQueryListeners(Future<Void> f) {
+    continuousQuery.removeAllListeners();
+    f.complete();
+  }
+
+  private Single<HttpResponse<String>> httpGet(String host, String uri) {
+    log.info("Call HTTP GET " + host + uri);
+    WebClient client = WebClient.create(vertx);
+    return client
+      .get(8080, host, uri)
+      .as(BodyCodec.string())
+      .rxSend();
   }
 
 }

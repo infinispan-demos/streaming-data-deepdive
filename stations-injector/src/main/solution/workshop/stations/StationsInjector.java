@@ -198,7 +198,7 @@ public class StationsInjector extends AbstractVerticle {
       f.complete();
     } catch (Exception e) {
       log.log(Level.SEVERE, "Error creating client", e);
-      throw new RuntimeException(e);
+      f.fail(e);
     }
   }
 

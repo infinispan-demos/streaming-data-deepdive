@@ -145,7 +145,7 @@ public class PositionsInjector extends AbstractVerticle {
       .subscribeOn(Schedulers.io());
   }
 
-  private void remoteCacheManager(io.vertx.reactivex.core.Future<Void> f) {
+  private void remoteCacheManager(Future<Void> f) {
     try {
       remote = new RemoteCacheManager(
         new ConfigurationBuilder().addServer()
@@ -168,7 +168,7 @@ public class PositionsInjector extends AbstractVerticle {
       f.complete();
     } catch (Exception e) {
       log.log(Level.SEVERE, "Error creating client", e);
-      throw new RuntimeException(e);
+      f.fail(e);
     }
   }
 

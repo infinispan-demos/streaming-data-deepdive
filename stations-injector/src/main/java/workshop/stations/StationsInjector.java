@@ -1,8 +1,10 @@
 package workshop.stations;
 
 import static java.util.logging.Level.SEVERE;
+import static workshop.shared.Constants.DATAGRID_HOST;
+import static workshop.shared.Constants.DATAGRID_PORT;
 import static workshop.shared.Constants.STATIONS_INJECTOR_URI;
-import static workshop.shared.Constants.STATION_BOARDS_TOPIC;
+import static workshop.shared.Constants.STATION_BOARDS_CACHE_NAME;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -13,31 +15,45 @@ import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
 
+import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
-import io.reactivex.Single;
+import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
-import io.vertx.config.ConfigRetrieverOptions;
-import io.vertx.config.ConfigStoreOptions;
-import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.json.JsonObject;
-import io.vertx.kafka.client.producer.KafkaWriteStream;
-import io.vertx.reactivex.config.ConfigRetriever;
 import io.vertx.reactivex.core.AbstractVerticle;
-import io.vertx.reactivex.core.impl.AsyncResultCompletable;
+import io.vertx.reactivex.core.Future;
+import io.vertx.reactivex.core.RxHelper;
 import io.vertx.reactivex.ext.web.Router;
 import io.vertx.reactivex.ext.web.RoutingContext;
-import org.apache.kafka.clients.producer.ProducerRecord;
+import org.infinispan.client.hotrod.RemoteCache;
+import org.infinispan.client.hotrod.RemoteCacheManager;
+import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
+import org.infinispan.client.hotrod.marshall.ProtoStreamMarshaller;
+import org.infinispan.protostream.FileDescriptorSource;
+import org.infinispan.protostream.SerializationContext;
+import workshop.model.Station;
+import workshop.model.Stop;
+import workshop.model.Train;
 
 public class StationsInjector extends AbstractVerticle {
 
   private static final Logger log = Logger.getLogger(StationsInjector.class.getName());
 
+  private long progressTimer;
+  private Disposable injector;
+
+  // TODO live coding
+
   @Override
-  public void start(Future<Void> future) {
+  public void start(io.vertx.core.Future<Void> future) {
     Router router = Router.router(vertx);
     router.get(STATIONS_INJECTOR_URI).handler(this::inject);
 
@@ -55,14 +71,32 @@ public class StationsInjector extends AbstractVerticle {
       );
   }
 
-  @Override
-  public void stop() {
-    // TODO live coding
+  // TODO live coding - stop()
+
+  private void inject(RoutingContext ctx) {
+    if (injector != null) {
+      injector.dispose();
+      vertx.cancelTimer(progressTimer);
+    }
+
+    executeInject(ctx);
   }
 
-  // TODO: Duplicate
-  private void inject(RoutingContext ctx) {
+  private void executeInject(RoutingContext ctx) {
+    String fileName = "cff-stop-2016-02-29__.jsonl.gz";
+
     // TODO live coding
+    // Station boards cache
+    // Clear cache
+    // Run on Vert.x context
+    // Subscribe
+
+    // TODO live coding
+    // Map to key/value pair
+    // Consume 1 entry each N ms, for throttling and better viewing experience
+    // Dispatch each element
+    // Control concurrency for cache (2nd part)
+
     ctx.response().end("TODO");
   }
 
@@ -88,7 +122,7 @@ public class StationsInjector extends AbstractVerticle {
       .subscribeOn(Schedulers.io());
   }
 
-  private static Map.Entry<String, String> toEntry(String line) {
+  private static Map.Entry<String, Stop> toEntry(String line) {
     JsonObject json = new JsonObject(line);
     String trainName = json.getString("name");
     String trainTo = json.getString("to");
@@ -100,26 +134,15 @@ public class StationsInjector extends AbstractVerticle {
     String departure = jsonStop.getString("departure");
     String stopId = String.format("%s/%s/%s/%s", stationId, trainName, trainTo, departure);
 
-    return new AbstractMap.SimpleImmutableEntry<>(stopId, line);
+    return new AbstractMap.SimpleImmutableEntry<>(stopId, Stop.make(line));
   }
 
-  private Single<JsonObject> kafkaCfg() {
-    ConfigStoreOptions store = new ConfigStoreOptions()
-      .setType("file")
-      .setFormat("yaml")
-      .setConfig(new JsonObject()
-        .put("path", "app-config.yaml")
-      );
-    return ConfigRetriever.create(vertx, new ConfigRetrieverOptions().addStore(store)).rxGetConfig();
-  }
+  private Completable dispatch(Map.Entry<String, Stop> entry) {
+    log.info("Entry read " + entry.getKey());
 
-  private Completable dispatch(Map.Entry<String, String> entry) {
     // TODO live coding
 
-    return new AsyncResultCompletable(h -> {
-      log.info("Entry read " + entry.getKey());
-      // TODO live coding
-    });
+    return Completable.complete();
   }
 
 }

@@ -12,11 +12,18 @@ import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.Search;
 import org.infinispan.client.hotrod.annotation.ClientCacheEntryCreated;
 import org.infinispan.client.hotrod.annotation.ClientListener;
+import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
 import org.infinispan.client.hotrod.event.ClientCacheEntryCreatedEvent;
+import org.infinispan.client.hotrod.marshall.ProtoStreamMarshaller;
+import org.infinispan.protostream.FileDescriptorSource;
+import org.infinispan.protostream.SerializationContext;
 import org.infinispan.query.dsl.Query;
 import org.infinispan.query.dsl.QueryFactory;
+import workshop.model.GeoLocBearing;
+import workshop.model.TimedPosition;
 import workshop.model.TrainPosition;
 
+import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +34,8 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
+import static workshop.shared.Constants.DATAGRID_HOST;
+import static workshop.shared.Constants.DATAGRID_PORT;
 import static workshop.shared.Constants.DELAYED_TRAINS_CACHE_NAME;
 import static workshop.shared.Constants.DELAYED_TRAINS_POSITIONS_ADDRESS;
 import static workshop.shared.Constants.DELAYED_TRAINS_POSITIONS_URI;
@@ -37,31 +46,31 @@ public class DelayedTrains extends AbstractVerticle {
 
   private static final Logger log = Logger.getLogger(DelayedTrains.class.getName());
 
-  private RemoteCacheManager client;
+  private RemoteCacheManager remote;
 
   private ConcurrentMap<String, String> trainIds = new ConcurrentHashMap<>();
+  private DelayedTrainListener listener;
+  private Long publishTimer;
 
   @Override
-  public void start(io.vertx.core.Future<Void> future) throws Exception {
+  public void start(io.vertx.core.Future<Void> future) {
     Router router = Router.router(vertx);
 
     router.get(DELAYED_TRAINS_POSITIONS_URI).blockingHandler(this::positionsHandler);
 
-    // TODO live coding
+    // TODO live coding - sockjs and permit
 
     router.get(LISTEN_URI).handler(this::listen);
 
     vertx
-      .rxExecuteBlocking(Util::remoteCacheManager)
+      .rxExecuteBlocking(this::remoteCacheManager)
       .flatMap(remote ->
         vertx.createHttpServer()
           .requestHandler(router::accept)
           .rxListen(8080)
-          .map(s -> remote)
       )
       .subscribe(
-        remote -> {
-          client = remote;
+        server -> {
           log.info("Delayed trains HTTP server started");
           future.complete();
         },
@@ -72,7 +81,12 @@ public class DelayedTrains extends AbstractVerticle {
   private void listen(RoutingContext ctx) {
     vertx
       .rxExecuteBlocking(this::addDelayedTrainsListener)
-      .doOnSuccess(v -> vertx.setPeriodic(3000, l -> publishPositions()))
+      .doOnSuccess(v -> {
+        if (publishTimer != null)
+          vertx.cancelTimer(publishTimer);
+
+        publishTimer = vertx.setPeriodic(3000, l -> publishPositions());
+      })
       .subscribe(res ->
           ctx.response().end("Listener started")
         , t -> {
@@ -86,16 +100,29 @@ public class DelayedTrains extends AbstractVerticle {
   }
 
   private void addDelayedTrainsListener(Future<Void> f) {
-    RemoteCache<Object, Object> delayed = client.getCache(DELAYED_TRAINS_CACHE_NAME);
-    delayed.clear();
+    RemoteCache<Object, Object> delayed = remote.getCache(DELAYED_TRAINS_CACHE_NAME);
+    if (listener != null) {
+      delayed.removeClientListener(listener);
+      delayed.clear();
+    }
+
+    listener = new DelayedTrainListener();
+    trainIds = new ConcurrentHashMap<>();
+
     delayed.addClientListener(new DelayedTrainListener());
+
     log.info("Added delayed train listener");
     f.complete();
   }
 
   @Override
-  public void stop() {
-    if (Objects.nonNull(client)) client.stop();
+  public void stop(io.vertx.core.Future<Void> future) {
+    if (Objects.nonNull(remote)) {
+      remote.stopAsync()
+        .thenRun(future::complete);
+    } else {
+      future.complete();
+    }
   }
 
   private void positionsHandler(RoutingContext ctx) {
@@ -116,7 +143,7 @@ public class DelayedTrains extends AbstractVerticle {
   }
 
   private String showTrains(ConcurrentMap<String, String> trainIds) {
-    RemoteCache<String, TrainPosition> positions = client.getCache(TRAIN_POSITIONS_CACHE_NAME);
+    RemoteCache<String, TrainPosition> positions = remote.getCache(TRAIN_POSITIONS_CACHE_NAME);
     return trainIds.entrySet().stream()
       .map(e -> getTrainId(e, positions))
       .filter(Objects::nonNull)
@@ -132,7 +159,37 @@ public class DelayedTrains extends AbstractVerticle {
     if (!entry.getValue().isEmpty())
       return entry.getValue();
 
+    String trainName = entry.getKey();
+    QueryFactory queryFactory = Search.getQueryFactory(positionsCache);
+
+    // TODO live coding
+    // Create query
+    // Set query parameter
+    // Get query result set
+    // Get first train id (not totally accurate)
+
     return null;
+  }
+
+  void remoteCacheManager(Future<Void> f) {
+    this.remote = new RemoteCacheManager(
+      new ConfigurationBuilder().addServer()
+        .host(DATAGRID_HOST)
+        .port(DATAGRID_PORT)
+        .marshaller(ProtoStreamMarshaller.class)
+        .build());
+
+    SerializationContext ctx = ProtoStreamMarshaller.getSerializationContext(remote);
+    try {
+      ctx.registerProtoFiles(FileDescriptorSource.fromResources("train-position.proto"));
+      ctx.registerMarshaller(new TrainPosition.Marshaller());
+      ctx.registerMarshaller(new TimedPosition.Marshaller());
+      ctx.registerMarshaller(new GeoLocBearing.Marshaller());
+
+      f.complete();
+    } catch (IOException e) {
+      f.fail(e);
+    }
   }
 
   @ClientListener
