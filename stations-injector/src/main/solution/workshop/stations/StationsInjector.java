@@ -16,6 +16,7 @@ import java.util.AbstractMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
@@ -23,13 +24,10 @@ import java.util.zip.GZIPInputStream;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
-import io.reactivex.Single;
+import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
-import io.vertx.config.ConfigRetrieverOptions;
-import io.vertx.config.ConfigStoreOptions;
 import io.vertx.core.Handler;
 import io.vertx.core.json.JsonObject;
-import io.vertx.reactivex.config.ConfigRetriever;
 import io.vertx.reactivex.core.AbstractVerticle;
 import io.vertx.reactivex.core.Future;
 import io.vertx.reactivex.core.RxHelper;
@@ -51,6 +49,9 @@ public class StationsInjector extends AbstractVerticle {
 
   private RemoteCacheManager remote;
   private RemoteCache<String, Stop> stationBoardsCache;
+
+  private long progressTimer;
+  private Disposable injector;
 
   @Override
   public void start(io.vertx.core.Future<Void> future) {
@@ -85,40 +86,45 @@ public class StationsInjector extends AbstractVerticle {
   }
 
   private void inject(RoutingContext ctx) {
+    if (injector != null) {
+      injector.dispose();
+      vertx.cancelTimer(progressTimer);
+    }
+
     vertx
       .rxExecuteBlocking(stationBoardsCache())
       .flatMapCompletable(x -> clearStationBoardsCache())
       .subscribeOn(RxHelper.scheduler(vertx.getOrCreateContext()))
       .subscribe(() -> {
-        vertx.setPeriodic(5000L, l ->
+        progressTimer = vertx.setPeriodic(5000L, l ->
           vertx.executeBlocking(fut -> {
             log.info(String.format("Progress: stored=%d%n", stationBoardsCache.size()));
             fut.complete();
-          }, false, ar -> {}));
+          }, false, ar -> {
+          }));
 
         Flowable<String> fileFlowable = rxReadGunzippedTextResource("cff-stop-2016-02-29__.jsonl.gz");
 
-        Flowable<Map.Entry<String, Stop>> pairFlowable = fileFlowable.map(StationsInjector::toEntry);
+        Flowable<Map.Entry<String, Stop>> pairFlowable = fileFlowable
+          .map(StationsInjector::toEntry)
+          .zipWith(Flowable.interval(5, TimeUnit.MILLISECONDS).onBackpressureDrop(), (item, interval) -> item);
 
-        Completable completable = pairFlowable.map(e -> {
-          CompletableFuture<Stop> putCompletableFuture =
-              stationBoardsCache.putAsync(e.getKey(), e.getValue());
-          return CompletableInterop.fromFuture(putCompletableFuture);
-        }).to(flowable -> Completable.merge(flowable, 100));
+        Completable completable = pairFlowable
+          .map(
+            e -> {
+              CompletableFuture<Stop> putCompletableFuture =
+                  stationBoardsCache.putAsync(e.getKey(), e.getValue());
+              return CompletableInterop.fromFuture(putCompletableFuture);
+            })
+          .to(flowable -> Completable.merge(flowable, 100));
 
-        completable.subscribe(() -> {}, t -> log.log(SEVERE, "Error while loading", t));
+        injector = completable.subscribe(
+          () -> log.info("Reached end")
+          , t -> log.log(SEVERE, "Error while loading", t)
+          );
 
         ctx.response().end("Injector started");
       });
-
-//    Flowable<String> fileFlowable = rxReadGunzippedTextResource("cff-stop-2016-02-29__.jsonl.gz");
-//    fileFlowable
-//      .map(StationsInjector::toEntry)
-//      .flatMapCompletable(this::dispatch)
-//      .subscribeOn(Schedulers.io())
-//      .doOnError(t -> log.log(SEVERE, "Error while loading", t))
-//      .subscribe();
-//    ctx.response().end("Injector started");
   }
 
   private Completable clearStationBoardsCache() {
@@ -167,18 +173,6 @@ public class StationsInjector extends AbstractVerticle {
       stationBoardsCache.putAsync(e.getKey(), Stop.make(e.getValue()));
 
     return CompletableInterop.fromFuture(future);
-//    ProducerRecord<String, String> record
-//      = new ProducerRecord<>(STATION_BOARDS_TOPIC, entry.getKey(), entry.getValue());
-//    return new AsyncResultCompletable(
-//      handler ->
-//        stream.write(record, x -> {
-//          if (x.succeeded()) {
-//            log.info("Entry written in Kafka: " + entry.getKey());
-//            handler.handle(Future.succeededFuture());
-//          } else {
-//            handler.handle(Future.failedFuture(x.cause()));
-//          }
-//        }));
   }
 
   private void remoteCacheManager(Future<Void> f) {

@@ -46,6 +46,8 @@ public class DelayedTrains extends AbstractVerticle {
   private RemoteCacheManager queryClient;
 
   private ConcurrentMap<String, String> trainIds = new ConcurrentHashMap<>();
+  private DelayedTrainListener listener;
+  private Long publishTimer;
 
   @Override
   public void start(Future<Void> future) throws Exception {
@@ -81,7 +83,12 @@ public class DelayedTrains extends AbstractVerticle {
   private void listen(RoutingContext ctx) {
     vertx
       .rxExecuteBlocking(fut -> fut.complete(addDelayedTrainsListener()))
-      .doOnSuccess(v -> vertx.setPeriodic(3000, l -> publishPositions()))
+      .doOnSuccess(v -> {
+        if (publishTimer != null)
+          vertx.cancelTimer(publishTimer);
+
+        publishTimer = vertx.setPeriodic(3000, l -> publishPositions());
+      })
       .subscribe(res ->
           ctx.response().end("Listener started")
         , t -> {
@@ -93,15 +100,25 @@ public class DelayedTrains extends AbstractVerticle {
   private void publishPositions() {
     vertx.<String>executeBlocking(fut -> fut.complete(positions()), ar -> {
       if (ar.succeeded()) {
-        vertx.eventBus().publish(DELAYED_TRAINS_POSITIONS_ADDRESS, ar.result());
+        final String positions = ar.result();
+        log.info("Publishing positions:");
+        log.info(positions);
+        vertx.eventBus().publish(DELAYED_TRAINS_POSITIONS_ADDRESS, positions);
       }
     });
   }
 
   private Void addDelayedTrainsListener() {
     RemoteCache<Object, Object> delayed = mgmtClient.getCache(DELAYED_TRAINS_CACHE_NAME);
-    delayed.clear();
-    delayed.addClientListener(new DelayedTrainListener());
+    if (listener != null) {
+      delayed.removeClientListener(listener);
+      delayed.clear();
+    }
+
+    listener = new DelayedTrainListener();
+    trainIds = new ConcurrentHashMap<>();
+    delayed.addClientListener(listener);
+
     log.info("Added delayed train listener");
     return null;
   }
@@ -161,6 +178,7 @@ public class DelayedTrains extends AbstractVerticle {
     if (it.hasNext()) {
       // Not accurate but simplest of methods
       String trainId = (String) it.next()[0];
+      log.info(String.format("Train name %s, train id %s", trainName, trainId));
       trainIds.put(trainName, trainId);
       return trainId;
     }

@@ -70,12 +70,18 @@ public class DelayedListener extends AbstractVerticle {
   private void listen() {
     vertx
       .rxExecuteBlocking(stationBoardsCache())
+      .flatMap(x -> vertx.rxExecuteBlocking(this::removeContinuousQueryListeners))
       .flatMap(x -> httpGet(WORKSHOP_MAIN_HOST, WORKSHOP_MAIN_URI))
       .flatMap(x -> vertx.rxExecuteBlocking(this::addContinuousQuery))
       .subscribe(
         x -> {}
         , t -> log.log(Level.SEVERE, "Error starting listener", t)
       );
+  }
+
+  private void removeContinuousQueryListeners(Future<Void> f) {
+    continuousQuery.removeAllListeners();
+    f.complete();
   }
 
   private void addContinuousQuery(Future<Void> f) {
@@ -98,7 +104,6 @@ public class DelayedListener extends AbstractVerticle {
         }
       };
 
-    continuousQuery.removeAllListeners();
     continuousQuery.addContinuousQueryListener(query, listener);
     log.info("Continuous query added");
   }

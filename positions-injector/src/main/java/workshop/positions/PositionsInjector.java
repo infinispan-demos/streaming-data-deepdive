@@ -9,7 +9,7 @@ import static workshop.shared.Constants.TRAIN_POSITIONS_CACHE_NAME;
 import hu.akarnokd.rxjava2.interop.CompletableInterop;
 import io.reactivex.Completable;
 import io.reactivex.Flowable;
-import io.reactivex.Single;
+import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
 import io.vertx.core.Handler;
 import io.vertx.core.json.JsonObject;
@@ -37,6 +37,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.zip.GZIPInputStream;
@@ -47,6 +48,9 @@ public class PositionsInjector extends AbstractVerticle {
 
   private RemoteCacheManager remote;
   private RemoteCache<String, TrainPosition> trainPositionsCache;
+
+  private long progressTimer;
+  private Disposable injector;
 
   @Override
   public void start(io.vertx.core.Future<Void> future) {
@@ -82,34 +86,31 @@ public class PositionsInjector extends AbstractVerticle {
 
   // TODO: Duplicate
   private void inject(RoutingContext ctx) {
+    if (injector != null) {
+      injector.dispose();
+      vertx.cancelTimer(progressTimer);
+    }
+
     vertx
       .rxExecuteBlocking(trainPositionsCache())
       .flatMapCompletable(x -> clearTrainPositionsCache())
       .subscribeOn(RxHelper.scheduler(vertx.getOrCreateContext()))
       .subscribe(() -> {
-        vertx.setPeriodic(5000L, l ->
+        progressTimer = vertx.setPeriodic(5000L, l ->
           vertx.executeBlocking(fut -> {
             log.info(String.format("Progress: stored=%d%n", trainPositionsCache.size()));
             fut.complete();
           }, false, ar -> {}));
 
-        rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
+        injector = rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
           .map(PositionsInjector::toEntry)
+          .zipWith(Flowable.interval(5, TimeUnit.MILLISECONDS).onBackpressureDrop(), (item, interval) -> item)
           .map(e -> CompletableInterop.fromFuture(trainPositionsCache.putAsync(e.getKey(), TrainPosition.make(e.getValue()))))
           .to(flowable -> Completable.merge(flowable, 100))
-          .subscribe(() -> {}, t -> log.log(SEVERE, "Error while loading", t));
+          .subscribe(() -> log.info("Reached end"), t -> log.log(SEVERE, "Error while loading", t));
 
         ctx.response().end("Injector started");
       });
-//
-//
-//    rxReadGunzippedTextResource("cff_train_position-2016-02-29__.jsonl.gz")
-//      .map(PositionsInjector::toEntry)
-//      .flatMapCompletable(this::dispatch)
-//      .subscribeOn(Schedulers.io())
-//      .doOnError(t -> log.log(SEVERE, "Error while loading", t))
-//      .subscribe();
-//    ctx.response().end("Injector started");
   }
 
   private Completable clearTrainPositionsCache() {
