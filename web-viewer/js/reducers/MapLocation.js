@@ -4,7 +4,7 @@ import ActionTypes from '../constants/ActionTypes';
 let defaultState = {
   location: {
     center: {lat: 47.567, lng: 7.6},
-    zoom: 10,
+    zoom: 11,
     bounds: {
       lngMin: 0,
       lngMax: 1,
