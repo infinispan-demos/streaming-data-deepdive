@@ -3,7 +3,7 @@
 #+BEGIN_SRC shell
 > cd ~/1/vert.x-openshift
 > git checkout master
-> gwu
+> gwU
 #+END_SRC
 ** Live coding
 #+BEGIN_SRC shell
@@ -101,7 +101,6 @@ private void executeInject(RoutingContext ctx) {
       , (item, interval) -> item
     )
     // Dispatch each element
-    // TODO: Can be map?
     .flatMapCompletable(this::dispatch)
     // Subscribe on IO scheduler
     .subscribeOn(Schedulers.io())
