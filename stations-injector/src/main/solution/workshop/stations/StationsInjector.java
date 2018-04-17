@@ -168,13 +168,6 @@ public class StationsInjector extends AbstractVerticle {
     return new AbstractMap.SimpleImmutableEntry<>(stopId, Stop.make(line));
   }
 
-  private Completable dispatch(Map.Entry<String, String> e) {
-    CompletableFuture<Stop> future =
-      stationBoardsCache.putAsync(e.getKey(), Stop.make(e.getValue()));
-
-    return CompletableInterop.fromFuture(future);
-  }
-
   private void remoteCacheManager(Future<Void> f) {
     try {
       remote = new RemoteCacheManager(
