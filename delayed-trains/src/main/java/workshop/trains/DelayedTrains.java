@@ -105,7 +105,7 @@ public class DelayedTrains extends AbstractVerticle {
 
           // TODO live coding
           // Publish positions
-          vertx.eventBus().publish(DELAYED_TRAINS_POSITIONS_ADDRESS, positions);
+          // ...
         }
       );
   }
