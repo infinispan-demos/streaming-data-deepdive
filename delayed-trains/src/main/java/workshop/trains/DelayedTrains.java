@@ -96,7 +96,18 @@ public class DelayedTrains extends AbstractVerticle {
   }
 
   private void publishPositions() {
-    // TODO live coding
+    vertx
+      .rxExecuteBlocking(this::positions)
+      .subscribe(
+        positions -> {
+          log.info("Publishing positions:");
+          log.info(positions);
+
+          // TODO live coding
+          // Publish positions
+          vertx.eventBus().publish(DELAYED_TRAINS_POSITIONS_ADDRESS, positions);
+        }
+      );
   }
 
   private void addDelayedTrainsListener(Future<Void> f) {
@@ -161,6 +172,8 @@ public class DelayedTrains extends AbstractVerticle {
 
     String trainName = entry.getKey();
     QueryFactory queryFactory = Search.getQueryFactory(positionsCache);
+
+    final String queryString = "select tp.trainId from workshop.model.TrainPosition tp where name = :trainName";
 
     // TODO live coding
     // Create query

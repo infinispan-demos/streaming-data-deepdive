@@ -1,0 +1,216 @@
+* Home folders
+** Live coding
+#+BEGIN_SRC shell
+> cd ~/1/streaming-data-deepdive
+#+END_SRC
+* First time
+** Adjust Docker settings
+- Disable "Start Docker when you log in"
+- Disable "Automatic check for updates"
+- Advanced / CPUs 4 / Memory 8.0 GB
+- Daemon / Insecure Registries / 172.30.0.0/16
+* Pre Talk
+** Start Gas Mask
+Load ~streaming-data-deep-dive~ file
+** Restart Docker
+To have a clean environment
+** Start OpenShift cluster
+#+BEGIN_SRC shell
+> oc37
+> oc cluster up
+#+END_SRC
+** Deploy all components
+- This includes a main entry point that creates the station board cache
+- It also includes a data grid visualizer
+#+BEGIN_SRC shell
+./deploy-all.sh
+#+END_SRC
+** Add Infinispan data grid templates
+#+BEGIN_SRC shell
+> cd openshift
+> oc create -f infinispan-centos7-imagestream.json
+> oc create -f infinispan-ephemeral-template.json
+#+END_SRC
+* Live coding
+** Show logs for injector in OpenShift console
+** Kick off injector
+#+BEGIN_SRC shell
+> curl http://stations-injector-myproject.127.0.0.1.nip.io/inject
+#+END_SRC
+** Stream -> Vert.x -> Infinispan
+*** Create data grid via OpenShift UI
+**** Follow UI to create data grid
+- Click on ~Add to Project~, select ~Browse Catalog~
+- Type ~infinispan~ and select ~infinispan-ephemeral~
+- Give it these parameters:
+#+BEGIN_SRC shell
+APPLICATION_NAME: datagrid
+MANAGEMENT_USER: developer
+MANAGEMENT_PASSWORD: developer
+NUMBER_OF_INSTANCES: 3
+#+END_SRC
+*** Stations Injector
+**** Construct and assign remote cache manager
+Use ~ddrcm~ for expanding creating remote cache manager
+#+BEGIN_SRC java
+vertx
+  .rxExecuteBlocking(this::remoteCacheManager)
+  .flatMap(x ->
+    vertx
+      .createHttpServer()
+      .requestHandler(router::accept)
+      .rxListen(8080)
+  )
+  .subscribe(
+    server -> {
+      log.info("Http server started and connected to datagrid");
+      future.complete();
+    }
+    , future::fail
+  );
+#+END_SRC
+*** Implement inject
+**** Move reading file into code within
+#+BEGIN_SRC java
+private void executeInject(RoutingContext ctx) {
+  String fileName = "cff-stop-2016-02-29__.jsonl.gz";
+
+  // TODO live coding
+  vertx
+    // Station boards cache
+    .rxExecuteBlocking(stationBoardsCache())
+    // Clear cache
+    .flatMapCompletable(x -> clearStationBoardsCache())
+    // Run on Vert.x context
+    .subscribeOn(RxHelper.scheduler(vertx.getOrCreateContext()))
+    // Subscribe
+    .subscribe(() -> {
+      progressTimer = trackProgress();
+
+      // TODO live coding
+      injector = rxReadGunzippedTextResource(fileName)
+        // Map to key/value pair
+        .map(StationsInjector::toEntry)
+        // Consume 1 entry each 5ms, for throttling and better viewing experience
+        .zipWith(
+          Flowable.interval(5, TimeUnit.MILLISECONDS).onBackpressureDrop()
+          , (item, interval) -> item
+        )
+        // Dispatch each element
+        .map(this::dispatch)
+        // Control concurrency
+        .to(flow -> Completable.merge(flow, 100))
+        // Subscribe
+        .subscribe(
+          () -> log.info("Reached end")
+          , t -> injectFailure(ctx, t)
+        );
+
+      ctx.response().end("Injector started");
+    });
+}
+#+END_SRC
+**** Implement dispatch()
+Store asynchronously into Infinispan
+#+BEGIN_SRC java
+private Completable dispatch(Map.Entry<String, Stop> entry) {
+  log.info("Entry read " + entry.getKey());
+
+  // Put asynchronously into cache
+  CompletableFuture<Stop> future =
+    stationBoardsCache.putAsync(entry.getKey(), entry.getValue());
+
+  return CompletableInterop
+    // Convert into Completable
+    .fromFuture(future);
+}
+#+END_SRC
+**** Add concurrency control for the client
+#+BEGIN_SRC java
+.to(flow -> Completable.merge(flow, 100))
+#+END_SRC
+**** Add Verticle.stop() implementation and stop Infinispan client
+Use ~ddis~ live template for ~stop()~
+*** Deploy injector changes
+#+BEGIN_SRC shell
+> cd stations-injector
+> mvn fabric8:deploy
+#+END_SRC
+*** Show data grid visualizer
+- URL: http://datagrid-visualizer-myproject.127.0.0.1.nip.io/infinispan-visualizer/
+- Select ~station-boards~ caches
+- Not much appearing for now
+*** Start injector
+#+BEGIN_SRC shell
+> curl http://stations-injector-myproject.127.0.0.1.nip.io/inject
+#+END_SRC
+*** Show data grid visualizer filling up
+URL: http://datagrid-visualizer-myproject.127.0.0.1.nip.io/infinispan-visualizer/
+** Infinispan -> Dashboard
+*** Create continuous query listener in ~DelayedListener~ class
+**** Create query
+#+BEGIN_SRC java
+Query query = queryFactory.from(Stop.class)
+  .having("delayMin").gt(0L)
+  .build();
+#+END_SRC
+**** Publish Stop to event bus
+#+BEGIN_SRC java
+vertx.eventBus().publish("delayed-trains", stopAsJson);
+#+END_SRC
+**** Bind listener and query together
+#+BEGIN_SRC java
+continuousQuery.addContinuousQueryListener(query, listener);
+#+END_SRC
+*** Redeploy delay-listener component
+#+BEGIN_SRC shell
+cd delay-listener
+mvn fabric8:deploy
+#+END_SRC
+*** Explain and start dashboard from IDE
+When the dashboard connects, it also restarts data injection
+, so no need to pre-inject data.
+
+Run ~dashboard.DelayedDashboard~ class
+** Infinispan -> Event Bus
+*** Open ~DelayedTrains~ class and add sockjs bridge details
+Live code template ~ddsj~
+*** Add permitted address to be broadcasted
+#+BEGIN_SRC java
+options.addOutboundPermitted(
+  new PermittedOptions().setAddress(DELAYED_TRAINS_POSITIONS_ADDRESS)
+);
+#+END_SRC
+*** Publish positions to event bus
+#+BEGIN_SRC java
+vertx.eventBus().publish(DELAYED_TRAINS_POSITIONS_ADDRESS, positions);
+#+END_SRC
+*** Create query to get all train IDs for trains with a certain route name
+#+BEGIN_SRC java
+Query query = queryFactory.create(queryString);
+query.setParameter("trainName", trainName);
+#+END_SRC
+*** Execute the query
+#+BEGIN_SRC java
+List<Object[]> trains = query.list();
+#+END_SRC
+*** Get first train ID returned (not the most accurate)
+Live template ~ddti~
+*** Redeploy delayed trains component changes
+#+BEGIN_SRC shell
+> cd delayed-trains
+> mvn fabric8:deploy
+#+END_SRC
+*** Start train position viewer
+#+BEGIN_SRC shell
+> cd web-viewer
+> nodejs
+> nvm use 4.2
+> npm start
+#+END_SRC
+*** Open train viewer
+http://localhost:3000
+*** Start dashboard from IDE
+Run ~dashboard.DelayedDashboard~ class
+*** Check train viewer
+Once you see a delayed train, check the train viewer

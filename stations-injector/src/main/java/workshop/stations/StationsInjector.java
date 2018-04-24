@@ -51,6 +51,8 @@ public class StationsInjector extends AbstractVerticle {
   private Disposable injector;
 
   // TODO live coding
+  private RemoteCacheManager remote;
+  private RemoteCache<String, Stop> stationBoardsCache;
 
   @Override
   public void start(io.vertx.core.Future<Void> future) {
@@ -71,7 +73,15 @@ public class StationsInjector extends AbstractVerticle {
       );
   }
 
-  // TODO live coding - stop()
+  @Override
+  public void stop(io.vertx.core.Future<Void> future) {
+    if (Objects.nonNull(remote)) {
+      remote.stopAsync()
+        .thenRun(future::complete);
+    } else {
+      future.complete();
+    }
+  }
 
   private void inject(RoutingContext ctx) {
     if (injector != null) {
@@ -90,14 +100,33 @@ public class StationsInjector extends AbstractVerticle {
     // Clear cache
     // Run on Vert.x context
     // Subscribe
+      // Control concurrency for cache (2nd part)
 
-    // TODO live coding
-    // Map to key/value pair
-    // Consume 1 entry each N ms, for throttling and better viewing experience
-    // Dispatch each element
-    // Control concurrency for cache (2nd part)
+    injector = rxReadGunzippedTextResource(fileName)
+      // Map to key/value pair
+      .map(StationsInjector::toEntry)
+      // Consume 1 entry each 5ms, for throttling and better viewing experience
+      .zipWith(
+        Flowable.interval(1000, TimeUnit.MILLISECONDS).onBackpressureDrop()
+        , (item, interval) -> item
+      )
+      // Dispatch each element
+      .flatMapCompletable(this::dispatch)
+      // Subscribe on IO scheduler
+      .subscribeOn(Schedulers.io())
+      // Subscribe
+      .subscribe(
+        () -> log.info("Reached end")
+        , t -> injectFailure(ctx, t)
+      );
 
-    ctx.response().end("TODO");
+    ctx.response().end("Injector started");
+
+  }
+
+  private static void injectFailure(RoutingContext ctx, Throwable t) {
+      log.log(SEVERE, "Error while loading", t);
+      ctx.response().end("Inject failure");
   }
 
   // TODO: Duplicate
@@ -143,6 +172,57 @@ public class StationsInjector extends AbstractVerticle {
     // TODO live coding
 
     return Completable.complete();
+  }
+
+  private void remoteCacheManager(Future<Void> f) {
+    try {
+      remote = new RemoteCacheManager(
+        new ConfigurationBuilder().addServer()
+          .host(DATAGRID_HOST)
+          .port(DATAGRID_PORT)
+          .marshaller(ProtoStreamMarshaller.class)
+          .build());
+
+      SerializationContext ctx =
+        ProtoStreamMarshaller.getSerializationContext(remote);
+
+      ctx.registerProtoFiles(
+        FileDescriptorSource.fromResources("station-board.proto")
+      );
+
+      ctx.registerMarshaller(new Stop.Marshaller());
+      ctx.registerMarshaller(new Station.Marshaller());
+      ctx.registerMarshaller(new Train.Marshaller());
+
+      f.complete();
+    } catch (Exception e) {
+      log.log(Level.SEVERE, "Error creating client", e);
+      f.fail(e);
+    }
+  }
+
+  private Handler<Future<Void>> stationBoardsCache() {
+   return f -> {
+     this.stationBoardsCache = remote.getCache(STATION_BOARDS_CACHE_NAME);
+     f.complete();
+   };
+  }
+
+  private Completable clearStationBoardsCache() {
+    return CompletableInterop.fromFuture(stationBoardsCache.clearAsync());
+  }
+
+  private long trackProgress() {
+    return vertx.setPeriodic(5000L, l ->
+      vertx.executeBlocking(
+        fut -> {
+          log.info(String.format("Progress: stored=%d%n", stationBoardsCache.size()));
+          fut.complete();
+        }
+        , false
+        , ar -> {}
+      )
+    );
   }
 
 }

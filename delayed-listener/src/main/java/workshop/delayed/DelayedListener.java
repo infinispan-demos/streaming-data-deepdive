@@ -87,21 +87,42 @@ public class DelayedListener extends AbstractVerticle {
   private void addContinuousQuery(Future<Void> f) {
     log.info("Add continuous query");
 
-    // TODO live coding
     // Get query factory
+    QueryFactory queryFactory = Search.getQueryFactory(stationBoardsCache);
+
+    // TODO live coding
     // Create query
+    Query query = null;
+
     // Create continuous query listener
-      // Convert stop to json
-      // Publish json
-      // Store train name in delayed trains cache
+    final ContinuousQueryListener<String, Stop> listener =
+        new ContinuousQueryListener<String, Stop>() {
+      @Override
+      public void resultJoining(String key, Stop value) {
+        log.info(String.format("[%d] Stop id=%s joining result%n", this.hashCode(), key));
+
+        // Convert stop to json
+        final JsonObject stopAsJson = toJson(value);
+
+        // TODO live coding
+        // Publish json
+        // ...
+
+        // Store train name in delayed trains cache
+        RemoteCache<String, String> delayed = remote.getCache(DELAYED_TRAINS_CACHE_NAME);
+        delayed.putAsync(value.train.getName(), value.train.getName());
+      }
+    };
+
 
     // TODO live coding
     // Put listener and query together
+    // ...
 
     log.info("TODO");
 
-    // TODO live coding
     // Complete future
+    f.complete();
   }
 
   @Override
