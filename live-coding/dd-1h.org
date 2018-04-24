@@ -19,12 +19,6 @@ To have a clean environment
 > oc37
 > oc cluster up
 #+END_SRC
-** Deploy all components
-- This includes a main entry point that creates the station board cache
-- It also includes a data grid visualizer
-#+BEGIN_SRC shell
-./deploy-all.sh
-#+END_SRC
 ** Add Infinispan data grid templates
 #+BEGIN_SRC shell
 > cd openshift
@@ -49,9 +43,13 @@ MANAGEMENT_USER: developer
 MANAGEMENT_PASSWORD: developer
 NUMBER_OF_INSTANCES: 3
 #+END_SRC
-*** Stations Injector
-**** Construct and assign remote cache manager
-Use ~ddrcm~ for expanding creating remote cache manager
+*** Deploy all components
+- This includes a main entry point that creates the station board cache
+- It also includes a data grid visualizer
+#+BEGIN_SRC shell
+./deploy-all.sh
+#+END_SRC*** Stations Injector
+*** Construct and assign remote cache manager
 #+BEGIN_SRC java
 vertx
   .rxExecuteBlocking(this::remoteCacheManager)
@@ -129,8 +127,6 @@ private Completable dispatch(Map.Entry<String, Stop> entry) {
 #+BEGIN_SRC java
 .to(flow -> Completable.merge(flow, 100))
 #+END_SRC
-**** Add Verticle.stop() implementation and stop Infinispan client
-Use ~ddis~ live template for ~stop()~
 *** Deploy injector changes
 #+BEGIN_SRC shell
 > cd stations-injector
